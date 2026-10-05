@@ -1,0 +1,198 @@
+{
+ "service": "workforce-scheduler",
+ "run": "demo-1",
+ "tokens": {
+  "scheduler": "acme-scheduler-demo",
+  "viewer": "acme-viewer-demo",
+  "admin": "acme-admin-demo"
+ },
+ "steps": [
+  {
+   "title": "Forecast Saturday's demand",
+   "say": "One store, next week. This Saturday carries a promotion and last Saturday did not, so copying last week would leave the store short. The forecast is half-hourly, then turned into the number of people needed per skill.",
+   "calls": [
+    {
+     "key": "loc",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/locations?q=%2301"
+    },
+    {
+     "key": "fc",
+     "as": "scheduler",
+     "method": "POST",
+     "path": "/v1/demand:forecast",
+     "body": {
+      "location_id": "{{loc.items.0.id}}",
+      "horizon_start": "2026-10-12",
+      "focus_day": 5
+     }
+    }
+   ]
+  },
+  {
+   "title": "Build a schedule that obeys every rule",
+   "say": "A constraint solver assigns shifts for the whole week: only skills a person holds with a valid certificate, never when they are unavailable, 11 hours of rest between shifts, a weekly maximum, a day off, and a break inside every long shift. A separate checker then re-verifies the result.",
+   "calls": [
+    {
+     "key": "opt",
+     "as": "scheduler",
+     "method": "POST",
+     "path": "/v1/schedules:optimize",
+     "body": {
+      "location_id": "{{loc.items.0.id}}",
+      "horizon_start": "2026-10-12",
+      "time_limit_seconds": 20
+     }
+    },
+    {
+     "key": "sched",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/schedules/{{opt.result.schedule_id}}?day=5"
+    }
+   ]
+  },
+  {
+   "title": "Cost and preference score",
+   "say": "The same week, the same rules and the same people, scheduled two ways: a careful first-fit method (the way a manager fills a spreadsheet) and the solver.",
+   "calls": [
+    {
+     "key": "cost",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/schedules/{{opt.result.schedule_id}}?day=6"
+    }
+   ]
+  },
+  {
+   "title": "Two call-outs in the Saturday evening peak",
+   "say": "Saturday afternoon, two people report sick for the busiest hours: a cashier and one of the few people certified for the service desk.",
+   "calls": [
+    {
+     "key": "cs",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/schedules/{{opt.result.schedule_id}}/shifts?day=5&skill=cashier&at=18:00"
+    },
+    {
+     "key": "ds",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/schedules/{{opt.result.schedule_id}}/shifts?day=5&skill=service_desk&at=18:00"
+    },
+    {
+     "key": "co1",
+     "as": "scheduler",
+     "method": "POST",
+     "path": "/v1/callouts",
+     "body": {
+      "shift_id": "{{cs.items.0.shift_id}}",
+      "reason": "sick"
+     }
+    },
+    {
+     "key": "co2",
+     "as": "scheduler",
+     "method": "POST",
+     "path": "/v1/callouts",
+     "body": {
+      "shift_id": "{{ds.items.0.shift_id}}",
+      "reason": "sick"
+     }
+    }
+   ]
+  },
+  {
+   "title": "Who can legally step in, and the smallest repair",
+   "say": "For the cashier shift there is a ranked list of people who can legally step in. For the service desk shift there is nobody: everyone certified is already working or blocked by a rule. So a repair solve covers both gaps by moving people already on the schedule, changing as few of the published assignments as it can.",
+   "calls": [
+    {
+     "key": "rep1",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/callouts/{{co1.id}}/replacements"
+    },
+    {
+     "key": "rep",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/callouts/{{co2.id}}/replacements"
+    },
+    {
+     "key": "fix",
+     "as": "scheduler",
+     "method": "POST",
+     "path": "/v1/schedules/{{opt.result.schedule_id}}:repair",
+     "body": {
+      "day": 5
+     }
+    }
+   ]
+  },
+  {
+   "title": "A shift offered on the marketplace",
+   "say": "Someone offers their Sunday service desk shift. The first colleague to claim it is refused automatically, with the rule that blocks them. The second passes every check and the shift moves.",
+   "calls": [
+    {
+     "key": "ms",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/schedules/{{opt.result.schedule_id}}/shifts?day=6&skill=service_desk"
+    },
+    {
+     "key": "ord",
+     "as": "scheduler",
+     "method": "POST",
+     "path": "/v1/shift-market/orders",
+     "body": {
+      "shift_id": "{{ms.items.0.shift_id}}"
+     }
+    },
+    {
+     "key": "cand",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/shift-market/orders/{{ord.id}}/candidates"
+    },
+    {
+     "key": "bad",
+     "as": "scheduler",
+     "method": "POST",
+     "path": "/v1/shift-market/orders/{{ord.id}}:claim",
+     "body": {
+      "worker_id": "{{cand.blocked_examples.0.worker_id}}"
+     },
+     "expect_error": true
+    },
+    {
+     "key": "ok",
+     "as": "scheduler",
+     "method": "POST",
+     "path": "/v1/shift-market/orders/{{ord.id}}:claim",
+     "body": {
+      "worker_id": "{{cand.candidates.0.worker_id}}"
+     }
+    }
+   ]
+  },
+  {
+   "title": "Overtime and fairness, before and after",
+   "say": "The week as the first-fit method would have run it, as the solver published it, and as it stands after two call-outs, a repair and a swap.",
+   "calls": [
+    {
+     "key": "fair",
+     "as": "viewer",
+     "method": "GET",
+     "path": "/v1/fairness?schedule_id={{opt.result.schedule_id}}"
+    },
+    {
+     "key": "audit",
+     "as": "admin",
+     "method": "GET",
+     "path": "/v1/audit?limit=9"
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Workforce Scheduling &amp; Labor Optimization</title>
+<link rel="stylesheet" href="kit.css">
+</head>
+<body>
+<header class="top">
+  <h1>Workforce Scheduling &amp; Labor Optimization</h1>
+  <span class="sub">An invented retailer: 50 stores, 5,000 hourly workers. One store, one week: who works when, legally, at what cost, and what happens when two people call in sick?</span>
+  <span class="mode">…</span>
+  <button class="primary" id="runall">Run all steps</button>
+</header>
+<main>
+  <nav class="steps"></nav>
+  <div>
+    <div id="steps"></div>
+    <section class="step" id="roi"><div class="head"><div class="grow"><h2>What is it worth?</h2>
+      <p>Uses this store's weekly labor cost from step 3 (run it first). The saving rate and the price are assumptions: change them.</p></div></div>
+      <div class="out"><div class="card roi" id="roibox"><span class="mute">Run step 3 to load the figures.</span></div></div></section>
+  </div>
+</main>
+<footer>Every store, worker and sale is synthetic, and the labor rules are a generic pack, not any jurisdiction's law.</footer>
+<script src="kit.js"></script>
+<script>
+const SK = { cashier: ['Cashier', PALETTE[0]], sales_floor: ['Sales floor', PALETTE[1]], stockroom: ['Stockroom', PALETTE[2]], service_desk: ['Service desk', PALETTE[4]] };
+const hm = v => { const s = Math.round(v); return String(6 + Math.floor(s / 2)).padStart(2, '0') + ':' + (s % 2 ? '30' : '00'); };
+const skill = k => `<span style="color:${SK[k][1]}">●</span> ${SK[k][0]}`;
+const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+const tot = (o, i) => Object.values(o).reduce((s, a) => s + a[i], 0);
+// shifts: [{worker, start_slot, length_slots, skill, break}] drawn as one bar per person
+function gantt(shifts) {
+  const W = 980, L = 150, rh = 13, H = shifts.length * rh + 24, X = s => L + (W - L - 8) * s / 32;
+  let g = '';
+  for (let s = 0; s <= 32; s += 4) g += `<line x1="${X(s)}" x2="${X(s)}" y1="14" y2="${H}" stroke="#25252b"/><text x="${X(s)}" y="10" text-anchor="middle">${hm(s)}</text>`;
+  shifts.forEach((s, i) => { const y = 18 + i * rh, c = SK[s.skill][1], b = s.length_slots > 12 ? s.start_slot + 8 : null;
+    g += `<text x="${L - 6}" y="${y + 9}" text-anchor="end" style="font-size:10px">${esc(s.worker)}</text>`;
+    g += b == null ? `<rect x="${X(s.start_slot)}" y="${y}" width="${X(s.start_slot + s.length_slots) - X(s.start_slot) - 1}" height="${rh - 3}" rx="2" fill="${c}" opacity="${s.source === 'repair' ? 1 : .8}"/>`
+      : `<rect x="${X(s.start_slot)}" y="${y}" width="${X(b) - X(s.start_slot) - 1}" height="${rh - 3}" rx="2" fill="${c}" opacity=".8"/><rect x="${X(b + 1)}" y="${y}" width="${X(s.start_slot + s.length_slots) - X(b + 1) - 1}" height="${rh - 3}" rx="2" fill="${c}" opacity=".8"/>`; });
+  return `<div style="overflow-x:auto"><svg viewBox="0 0 ${W} ${H}" width="100%" style="min-width:720px" role="img">${g}</svg></div><div class="legend">${Object.values(SK).map(([n, c]) => `<span><i style="background:${c}"></i>${n}</span>`).join('')}<span class="mute">gap in a bar = unpaid break</span></div>`;
+}
+const cmp = (rows, cols) => table([{ k: 'label', label: '' }, ...cols.map(([k, label]) => ({ k, label, num: 1, f: v => v }))], rows);
+const usd0 = v => fmt.usd(v, 0), h1 = v => fmt.n(v, 1) + ' h';
+const person = c => `${esc(c.worker)} <span class="mute small">${esc(c.employee_number)} · ${esc(c.employment_type.replace('_', ' '))}</span>`;
+const shiftTxt = s => `${DAYS[s.day]} ${s.start} to ${s.end}, ${SK[s.skill][0].toLowerCase()}`;
+const blockedBars = b => barChart(Object.entries(b).map(([k, v]) => ({ label: ({ CERT_EXPIRED: 'Certificate lapsed', REST_11H: 'Under 11 h rest', MAX_WEEKLY_HOURS: 'Over weekly maximum', MAX_DAYS: 'Would work all 7 days', UNAVAILABLE: 'Unavailable then', DOUBLE_BOOKED: 'Already working that day', UNQUALIFIED: 'Does not hold the skill' })[k] || k, value: v, color: PALETTE[3] })));
+const R = {
+  loc: l => `<div class="small mute" style="margin-bottom:10px">${fmt.n(l.locations)} stores, ${fmt.n(l.workers)} workers. Scheduling <b>${esc(l.items[0].name)}</b>: ${l.items[0].workers} workers, rule pack <span class="mono">${esc(l.items[0].rule_pack)}</span>.</div>`,
+  fc: f => { const sat = f.days[5], x = f.focus, n = x.times.length, pk = Math.max(...x.required_total), pk0 = Math.max(...x.required_total_if_copying_last_week);
+    return kpis([{ label: 'Saturday forecast', value: fmt.n(sat.transactions), sub: 'transactions, promotion on' }, { label: 'Last Saturday', value: fmt.n(sat.same_day_last_week), sub: 'no promotion' },
+        { label: 'Promotion effect learned', value: '+' + fmt.pct(f.learned.promotion_uplift - 1), sub: 'rain: ' + fmt.pct(f.learned.rain_effect - 1) }, { label: 'Backtest error, 8 weeks', value: fmt.pct(f.backtest.model_daily_wape, 1), sub: 'copying last week: ' + fmt.pct(f.backtest.baseline_daily_wape, 1) + ' (daily totals)' },
+        { label: 'People needed at peak', value: pk, sub: 'copying last week: ' + pk0 }])
+      + `<div class="grid2">${card('Saturday transactions per half hour', lineChart([{ name: 'forecast', points: x.transactions.map((v, i) => [i, v]) }, { name: 'last Saturday (baseline)', points: x.same_day_last_week.map((v, i) => [i, v]), color: '#8b8b96', dash: 1 }], { h: 210, ymin: 0, xfmt: hm }))}
+        ${card('People required, all skills', lineChart([{ name: 'from the forecast', points: x.required_total.map((v, i) => [i, v]), area: 1 }, { name: 'if last week were copied', points: x.required_total_if_copying_last_week.map((v, i) => [i, v]), color: '#8b8b96', dash: 1 }], { h: 210, ymin: 0, xfmt: hm }))}</div>`
+      + card('The week', table([{ k: 'date', label: 'Day', f: (v, r) => DAYS[f.days.indexOf(r)] + ' ' + v.slice(5) + (r.promotion ? ' ' + badge('promotion', 'warn') : '') + (r.rain ? ' ' + badge('rain') : '') }, { k: 'transactions', label: 'Forecast', num: 1, f: v => fmt.n(v) },
+        { k: 'same_day_last_week', label: 'Last week', num: 1, f: v => fmt.n(v) }, ...Object.keys(SK).map(k => ({ k: 'required_hours', label: SK[k][0] + ' hours', num: 1, f: v => fmt.n(v[k], 1) }))], f.days)); },
+  opt: j => { const r = j.result; return kpis([{ label: 'Solver', value: badge(r.solver_status.toLowerCase(), 'good'), sub: fmt.n(r.runtime_ms / 1000, 1) + ' s, within ' + fmt.pct(r.optimality_gap, 2) + ' of the best possible' }, { label: 'Yes / no decisions', value: fmt.n(r.variables) },
+      { label: 'Shifts assigned', value: r.published.shifts, sub: r.published.workers_scheduled + ' people' }, { label: 'Demand covered', value: fmt.pct(r.published.fill_rate, 1), sub: h1(r.published.understaffed_hours) + ' short in the week' },
+      { label: 'Rule violations', value: `<span style="color:var(--good)">${r.published.hard_violations}</span>`, sub: 'found by the independent checker' }]); },
+  sched: s => { const d = s.day, n = d.times.length;
+    return card(`Saturday coverage: people required and scheduled`, lineChart([{ name: 'required', points: d.times.map((_, i) => [i, tot(d.required, i)]), color: '#8b8b96', dash: 1 }, { name: 'scheduled (not on break)', points: d.times.map((_, i) => [i, tot(d.staffed, i)]), area: 1 }], { h: 200, ymin: 0, xfmt: hm }))
+      + card(`Saturday: ${d.shifts.length} shifts · rules checked: qualification, valid certificate, availability, 11 h rest, weekly maximum, a day off, break in long shifts`, gantt(d.shifts)); },
+  cost: s => { const b = s.baseline, p = s.published, row = (label, k, f, better) => ({ label, b: f(b[k]), p: `<b>${f(p[k])}</b>`, d: better });
+    return kpis([{ label: 'Labor cost for the week', value: usd0(p.labor_cost), sub: 'first-fit: ' + usd0(b.labor_cost) }, { label: 'Difference', value: `<span style="color:var(--good)">${fmt.pct(p.labor_cost / b.labor_cost - 1, 1)}</span>`, sub: usd0(b.labor_cost - p.labor_cost) + ' in one week' },
+        { label: 'Preference score', value: fmt.n(p.preference_score, 1), sub: 'first-fit: ' + fmt.n(b.preference_score, 1) + ' (100 = nobody works a time they asked to avoid)' }, { label: 'Demand covered', value: fmt.pct(p.fill_rate, 1), sub: 'first-fit: ' + fmt.pct(b.fill_rate, 1) }])
+      + card('Same week, same people, same rules', cmp([row('Labor cost', 'labor_cost', usd0), row('Paid hours', 'paid_hours', v => fmt.n(v)), row('Hours short of demand', 'understaffed_hours', h1), row('Hours beyond demand', 'overstaffed_hours', h1), row('Overtime hours', 'overtime_hours', h1),
+        row('Hours at times people asked to avoid', 'hours_in_avoided_times', h1), row('Share of hours at preferred times', 'share_of_hours_in_preferred_times', v => fmt.pct(v)), row('Rule violations', 'hard_violations', v => v)], [['b', 'First-fit (baseline)'], ['p', 'Solver']])); },
+  co1: c => R._co(c), co2: c => R._co(c),
+  _co: c => `<div class="small" style="margin-bottom:8px">${badge('call-out', 'bad')} <b>${esc(c.shift.worker)}</b>, ${shiftTxt(c.shift)}. Hours short on Saturday: ${fmt.n(c.understaffed_hours_before, 1)} → <b style="color:var(--bad)">${fmt.n(c.understaffed_hours_now, 1)}</b></div>`,
+  _step3: r => card('Gaps now open on Saturday', table([{ k: 'time', label: 'Time' }, { k: 'skill', label: 'Skill', f: skill }, { k: 'required', label: 'Required', num: 1 }, { k: 'staffed', label: 'Scheduled', num: 1 }], r.co2.gaps.slice(0, 8))
+    + (r.co2.gaps.length > 8 ? `<div class="small mute" style="margin-top:6px">first 8 of ${r.co2.gaps.length >= 12 ? 'many' : r.co2.gaps.length}</div>` : '')),
+  rep1: r => card(`Cashier shift (${shiftTxt(r.shift)}): ${r.eligible} people can legally take it, ${r.not_eligible} cannot`, table([{ k: 'rank', label: '#', num: 1 }, { k: 'worker', label: 'Candidate', f: (v, c) => person(c) }, { k: 'added_cost', label: 'Added pay', num: 1, f: v => fmt.usd(v, 2) },
+      { k: 'hours_after', label: 'Week hours after', num: 1, f: (v, c) => fmt.n(c.hours_before) + ' → ' + fmt.n(v) }, { k: 'overtime_hours', label: 'Overtime', num: 1, f: v => fmt.n(v, 1) + ' h' },
+      { k: 'avoid_weight_hours', label: 'Asked to avoid this time', f: v => v > 4 ? badge('strongly', 'bad') : v > 0 ? badge('a little', 'warn') : badge('no', 'good') }, { k: 'recent_weekends', label: 'Weekend days worked, last 4 weeks', num: 1 }], r.candidates)
+    + `<div class="small mute" style="margin-top:6px">${esc(r.ranking)}.</div>`),
+  rep: r => card(`Service desk shift (${shiftTxt(r.shift)}): ${r.eligible} people can legally take it`, `<div class="grid2"><div>${blockedBars(r.blocked_by_rule)}</div><div class="small">${r.blocked_examples.slice(0, 3).map(b => `<div style="margin-bottom:6px"><b>${esc(b.worker)}</b>: ${esc(b.why)}${b.detail.expired_on ? ' (' + esc(b.detail.expired_on) + ')' : ''}</div>`).join('')}
+      <div class="mute">Nobody can simply be called in. The repair has to move someone already on the schedule.</div></div></div>`),
+  fix: x => kpis([{ label: 'Assignments changed', value: x.assignments_changed, sub: 'of ' + x.assignments_on_the_day + ' on Saturday; rest of the week frozen' }, { label: 'Hours short on Saturday', value: fmt.n(x.understaffed_hours.after_callouts, 1) + ' → ' + fmt.n(x.understaffed_hours.after_repair, 1), sub: 'as published: ' + fmt.n(x.understaffed_hours.as_published, 1) },
+      { label: 'Solve time', value: fmt.n(x.runtime_ms) + ' ms', sub: x.solver_status.toLowerCase() }, { label: 'Rule violations after repair', value: `<span style="color:var(--good)">${x.hard_violations_after_repair}</span>`, sub: 'overtime: ' + fmt.n(x.overtime_hours_after_repair, 1) + ' h' },
+      { label: 'Week labor cost', value: usd0(x.labor_cost.after_repair), sub: 'published: ' + usd0(x.labor_cost.published) }])
+    + card('The repair', table([{ k: 'worker', label: 'Who' }, { k: 'change', label: 'Change', f: v => badge(v, v === 'called in' ? 'good' : 'warn') }, { k: 'before', label: 'Before', f: v => v ? `${v.start} to ${v.end}, ${skill(v.skill)}` : '<span class="mute">not working</span>' },
+      { k: 'after', label: 'After', f: v => v ? `${v.start} to ${v.end}, ${skill(v.skill)}` : '<span class="mute">released</span>' }], x.changes)),
+  ord: o => `<div class="small" style="margin-bottom:8px">${badge('offered', 'warn')} <b>${esc(o.offered_by)}</b> offers ${shiftTxt(o.shift)}.</div>`,
+  cand: c => `<div class="small mute" style="margin-bottom:8px">${c.eligible} colleagues may pick it up under the rule pack; ${c.not_eligible} may not.</div>`,
+  bad: e => `<div class="small" style="margin-bottom:8px">${badge('409 ' + e.code, 'bad')} ${esc(e.detail)}</div>`,
+  ok: o => `<div class="small" style="margin-bottom:10px">${badge('claimed', 'good')} <b>${esc(o.to)}</b> takes it from ${esc(o.from)}. ${o.rules_checked.length} rules checked, ${o.hard_violations} violations in the schedule.</div>`,
+  fair: f => { const b = f.baseline, p = f.published, c = f.current, row = (label, k, fn = v => fmt.n(v, 1)) => ({ label, b: fn(b[k]), p: fn(p[k]), c: `<b>${fn(c[k])}</b>` });
+    return card('Before and after', cmp([row('Overtime hours', 'overtime_hours'), row('People with overtime', 'workers_with_overtime', v => v), row('Hours at times people asked to avoid', 'hours_in_avoided_times'), row('Weekend shifts given to people who worked 4+ of the last 8 weekend days', 'weekend_shifts_to_people_who_just_worked_four', v => v),
+        row('People working both weekend days', 'workers_on_both_weekend_days', v => v), row('People below their contracted hours', 'workers_below_contracted_hours', v => v), row('Hours below contract, total', 'hours_below_contract'), row('Labor cost', 'labor_cost', usd0), row('Rule violations', 'hard_violations', v => v)],
+        [['b', 'First-fit (baseline)'], ['p', 'Solver, as published'], ['c', 'Now, after call-outs and swap']])
+        + `<div class="small mute" style="margin-top:6px">The solver pays for ${fmt.n(b.paid_hours - p.paid_hours)} fewer hours than first-fit. The cost of that shows in the "hours below contract" row: it is a real tradeoff, not a free saving.</div>`)
+      + `<div class="grid2">${card('Hours worked against contracted hours (people)', barChart(f.hours_vs_contract.histogram.map(h => ({ label: h.range.replace('150% to 1000%', '150% and over'), value: h.workers, color: h.range.startsWith('90') ? PALETTE[1] : PALETTE[0] }))))}
+        ${card('By employment type', table([{ k: 'employment_type', label: '', f: v => esc(v.replace('_', ' ')) }, { k: 'workers', label: 'People', num: 1 }, { k: 'mean_hours', label: 'Mean hours', num: 1 }, { k: 'mean_contracted', label: 'Contracted', num: 1 }, { k: 'max_hours', label: 'Most hours', num: 1 }, { k: 'weekend_shifts', label: 'Weekend shifts', num: 1 }], f.by_employment_type))}</div>`; },
+  audit: a => card(`Audit log · hash chain ${a.chain_valid ? 'verifies' : 'BROKEN'}`, table([{ k: 'at', label: 'When', f: fmt.time }, { k: 'action', label: 'Action', f: v => `<span class="mono">${esc(v)}</span>` },
+    { k: 'detail', label: 'Detail', f: d => `<span class="small">${esc(Object.entries(d).filter(([k, v]) => (typeof v !== 'object' || Array.isArray(v)) && !k.endsWith('_id')).map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`).join(' · ').slice(0, 130))}</span>` }], a.events.slice().reverse())),
+  _after: (i, r) => { if (i === 2) roi(r); },
+};
+function roi(r) {
+  const b = r.cost.baseline, p = r.cost.published, box = document.querySelector('#roibox');
+  box.innerHTML = `<div class="grid2"><div>
+    <label>Weekly labor cost per store today, $ (this store, first-fit) <input type="number" id="r_c" value="${Math.round(b.labor_cost)}"></label>
+    <label>Saving from better schedules, % (assumption) <input type="number" id="r_s" step="0.1" value="3"></label>
+    <label>Stores <input type="number" id="r_n" value="50"></label>
+    <label>Workers <input type="number" id="r_w" value="5000"></label>
+    <label>Price per active worker per month, $ (assumption) <input type="number" id="r_p" value="4"></label></div><div id="r_out"></div></div>`;
+  const calc = () => { const g = id => +document.querySelector(id).value, save = 52 * g('#r_c') * g('#r_s') / 100 * g('#r_n'), price = 12 * g('#r_w') * g('#r_p');
+    document.querySelector('#r_out').innerHTML = kpis([{ label: 'Labor saved a year', value: fmt.usd(save) }, { label: 'Subscription a year', value: fmt.usd(price) }, { label: 'Net', value: fmt.usd(save - price) }])
+      + `<div class="small mute">Step 3 measured ${(100 * (1 - p.labor_cost / b.labor_cost)).toFixed(1)}% against a simple first-fit schedule for one invented store. An experienced manager does better than first-fit, so the default here is a cautious 3%. Treat it as an input to test, not a promise.</div>`; };
+  box.oninput = calc; calc();
+}
+const demo = new Demo(R); demo.init();
+</script>
+</body>
+</html>
